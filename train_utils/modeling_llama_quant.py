@@ -56,6 +56,7 @@ from transformers.utils import (
 )
 
 from train_utils.quant_linear import QuantizeLinear
+from utils import quant_utils
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_func, flash_attn_varlen_func
@@ -1139,6 +1140,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     use_cache,
                     cache_position,
                     R1,
+                    use_reentrant=True,
                 )
             else:
                 layer_outputs = decoder_layer(

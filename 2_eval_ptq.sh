@@ -6,7 +6,7 @@
 # LICENSE file in the root directory of this source tree.
 
 torchrun --nnodes=1 --nproc_per_node=1 ptq.py \
---input_model $1 \
+--input_model /pv/models/llama/$1-hf \
 --do_train False \
 --do_eval True \
 --per_device_eval_batch_size 4 \
@@ -24,4 +24,4 @@ torchrun --nnodes=1 --nproc_per_node=1 ptq.py \
 --k_groupsize 128 \
 --v_groupsize 128 \
 --rotate \
---optimized_rotation_path "your_path/R.bin" \
+--optimized_rotation_path $5 \

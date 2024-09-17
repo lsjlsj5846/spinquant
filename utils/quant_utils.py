@@ -242,7 +242,7 @@ class ActQuantWrapper(torch.nn.Module):
 
         return str_
 
-    def forward(self, x, R1=None, R2=None, transpose=False):
+    def forward(self, x, R1=None, R2=None, transpose=False, is_down=False):
         x_dtype = x.dtype
 
         # Rotate, if needed
@@ -285,7 +285,7 @@ class ActQuantWrapper(torch.nn.Module):
             x = self.quantizer(x).to(x_dtype)
             self.quantizer.free()
         if R1 is not None:
-            x = self.module(x, R1, R2, transpose).to(x_dtype)
+            x = self.module(x, R1, R2, transpose, is_down).to(x_dtype)
         else:
             x = self.module(x).to(x_dtype)
 

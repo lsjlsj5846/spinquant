@@ -51,7 +51,9 @@ def train() -> None:
     log.info("Complete tokenizer loading...")
     model.config.use_cache = False
 
-    testloader = data_utils.get_wikitext2(
+    data_name = "c4"
+    testloader = data_utils.get_loader(
+        name=data_name,
         seed=ptq_args.seed,
         seqlen=2048,
         tokenizer=tokenizer,
@@ -59,7 +61,7 @@ def train() -> None:
     )
 
     dataset_ppl = eval_utils.evaluator(model, testloader, utils.DEV, ptq_args)
-    log.info("wiki2 ppl is: {}".format(dataset_ppl))
+    log.info(f" {data_name} ppl : {dataset_ppl:.4f}")
     dist.barrier()
 
 

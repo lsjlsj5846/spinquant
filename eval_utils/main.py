@@ -51,12 +51,11 @@ def ptq_model(args, model, model_args=None):
             model.load_state_dict(save_dict["model"])
 
         elif not args.w_rtn:  # GPTQ Weight Quantization
-            trainloader = data_utils.get_wikitext2(
+            trainloader = data_utils.get_loader(
+                model=model_args.input_model,
                 nsamples=args.nsamples,
                 seed=args.seed,
-                model=model_args.input_model,
                 seqlen=2048,
-                eval_mode=False,
             )
             quantizers = gptq_utils.gptq_fwrd(model, trainloader, "cuda", args)
             save_dict["w_quantizers"] = quantizers

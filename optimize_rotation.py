@@ -13,8 +13,9 @@ import datasets
 import torch
 import torch.distributed as dist
 from torch import nn
-from transformers import LlamaTokenizerFast, Trainer, default_data_collator
+from transformers import LlamaTokenizerFast, default_data_collator
 
+from train_utils.trainer import Trainer
 from train_utils.fsdp_trainer import FSDPTrainer
 from train_utils.main import prepare_model
 from train_utils.modeling_llama_quant import LlamaForCausalLM as LlamaForCausalLMQuant
@@ -40,6 +41,8 @@ class RotateModule(nn.Module):
 
 
 def train() -> None:
+    os.environ["WANDB_DISABLED"] = 'true'
+
     dist.init_process_group(backend="nccl", timeout=datetime.timedelta(hours=8))
     model_args, training_args, ptq_args = process_args_ptq()
     local_rank = get_local_rank()

@@ -26,7 +26,7 @@ def rtn_fwrd(model, dev, args):
 
     quantizers = {}
 
-    for i in tqdm.tqdm(range(len(layers)), desc="Inserting weight quantizer"):
+    for i in tqdm.tqdm(range(len(layers)), desc="Inserting RTN weight quantizer"):
         layer = layers[i].to(dev)
 
         subset = quant_utils.find_qlayers(

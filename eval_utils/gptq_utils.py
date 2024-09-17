@@ -214,8 +214,10 @@ def gptq_fwrd(model, dataloader, dev, args):
         ["mlp.up_proj.module", "mlp.gate_proj.module"],
         ["mlp.down_proj.module"],
     ]
-    for i in range(len(layers)):
-        print(f"\nLayer {i}:", flush=True, end=" ")
+
+    pbar = tqdm.tqdm(range(len(layers)))
+    for i in pbar:
+        pbar.set_description(f"(GPTQ quant.) Layer #{i+1}")
         layer = layers[i].to(dev)
         full = quant_utils.find_qlayers(layer, layers=[torch.nn.Linear])
         for names in sequential:
@@ -223,7 +225,6 @@ def gptq_fwrd(model, dataloader, dev, args):
 
             gptq = {}
             for name in subset:
-                print(f"{name}", end="  ", flush=True)
                 layer_weight_bits = args.w_bits
                 layer_weight_sym = not (args.w_asym)
                 if "lm_head" in name:
