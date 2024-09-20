@@ -34,9 +34,9 @@ def prepare_model(args, model):
 
     if args.w_bits < 16:
         if args.w_rtn:
-            quantizers = rtn_utils.rtn_fwrd(model, "cuda", args)
+            rtn_utils.rtn_fwrd(model, "cuda", args)
         else:
-            quantizers = gptq_utils.gptq_fwrd(model, "cuda", args)
+            gptq_utils.gptq_fwrd(model, "cuda", args)
 
     # Add Input Quantization
     if args.a_bits < 16 or args.v_bits < 16:

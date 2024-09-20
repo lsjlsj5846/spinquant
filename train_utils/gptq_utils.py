@@ -22,13 +22,19 @@ from train_utils.quant_linear import QuantizeLinear
 
 class GPTQ:
     def __init__(self, layer):
-        self.layer = layer
+        self.layer = layer # merely point to the model's layer (not cloning)
         self.dev = self.layer.weight.device
         W = layer.weight.data.clone()
         self.rows = W.shape[0]
         self.columns = W.shape[1]
-        self.H = torch.zeros((self.columns, self.columns), device=self.dev)
+        self.H = torch.zeros((self.columns, self.columns))
         self.nsamples = 0
+    
+    def _reinit(self):
+        self.H = torch.zeros((self.columns, self.columns))
+        self.nsamples = 0
+        torch.cuda.empty_cache()
+        utils.cleanup_memory(verbos=False)
 
     def add_batch(self, inp):
         if len(inp.shape) == 2:
@@ -37,6 +43,7 @@ class GPTQ:
         if len(inp.shape) == 3:
             inp = inp.reshape((-1, inp.shape[-1]))
         inp = inp.t()
+        self.H = self.H.to(self.dev)
         self.H *= self.nsamples / (self.nsamples + tmp)
         self.nsamples += tmp
         inp = math.sqrt(2 / self.nsamples) * inp.float()
@@ -50,14 +57,14 @@ class GPTQ:
         actorder=False,
         static_groups=False,
     ):
-        W = self.layer.weight.data.clone()
+        W = self.layer.weight.data.to(self.dev)
         W = W.float()
 
         if not self.quantizer.ready():
             self.quantizer.find_params(W)
 
-        H = self.H
-        del self.H
+        H = self.H.to(self.dev)
+        self._reinit()
         dead = torch.diag(H) == 0
         H[dead, dead] = 1
         W[:, dead] = 0
@@ -142,13 +149,6 @@ class GPTQ:
             )
             raise ValueError("NaN in weights")
 
-    def free(self):
-        self.H = None
-        self.Losses = None
-        self.Trace = None
-        torch.cuda.empty_cache()
-        utils.cleanup_memory(verbos=False)
-
 
 @torch.no_grad()
 def gptq_fwrd(model, dev, args):
@@ -157,8 +157,6 @@ def gptq_fwrd(model, dev, args):
     """
     layers = model.model.layers
     torch.cuda.empty_cache()
-
-    quantizers = {}
 
     for i in tqdm.tqdm(range(len(layers)), desc="Inserting GPTQ weight quantizer"):
         layer = layers[i].to(dev)
@@ -190,11 +188,8 @@ def gptq_fwrd(model, dev, args):
             subset[name].actorder = args.act_order
             subset[name].gptq = gptq
 
-            quantizers["model.layers.%d.%s" % (i, name)] = gptq.quantizer
-        
         layers[i] = layer.cpu()
         torch.cuda.empty_cache()
         del layer
 
     utils.cleanup_memory(verbos=True)
-    return quantizers

@@ -30,6 +30,7 @@ import shutil
 import sys
 import tempfile
 import time
+import tqdm
 import warnings
 from collections.abc import Mapping
 from pathlib import Path
@@ -167,6 +168,8 @@ from transformers.utils import (
 )
 from transformers.utils.quantization_config import QuantizationMethod
 
+from utils import utils, quant_utils
+from train_utils.quant_linear import QuantizeLinear
 
 DEFAULT_CALLBACKS = [DefaultFlowCallback]
 DEFAULT_PROGRESS_CALLBACK = ProgressCallback
@@ -1914,10 +1917,6 @@ class Trainer:
         train_dataloader = self.get_train_dataloader()
         if self.is_fsdp_xla_v2_enabled:
             train_dataloader = tpu_spmd_dataloader(train_dataloader)
-        
-        print(f"train dataloader type: {type(train_dataloader)}")
-        print(f"train dataloader data: {train_dataloader}")
-        exit(0)
 
         # Setting up training control variables:
         # number of training epochs: num_train_epochs
@@ -2090,6 +2089,17 @@ class Trainer:
         logger.info(f"  Total optimization steps = {max_steps:,}")
         logger.info(f"  Number of trainable parameters = {get_model_param_count(model, trainable_only=True):,}")
 
+        print("***** Running training *****")
+        print(f"  Num examples = {num_examples:,}") # 1,188
+        print(f"  Num Epochs = {num_train_epochs:,}") # 1
+        print(f"  Instantaneous batch size per device = {self.args.per_device_train_batch_size:,}") # 8
+        if self.args.per_device_train_batch_size != self._train_batch_size:
+            print(f"  Training with DataParallel so batch size has been adjusted to: {self._train_batch_size:,}")
+        print(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_train_batch_size:,}") # 8
+        print(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}") # 1
+        print(f"  Total optimization steps = {max_steps:,}") # 100
+        print(f"  Number of trainable parameters = {get_model_param_count(model, trainable_only=True):,}") # 17,301,504
+
         self.state.epoch = 0
         start_time = time.time()
         epochs_trained = 0
@@ -2212,6 +2222,114 @@ class Trainer:
                 elif steps_trained_progress_bar is not None:
                     steps_trained_progress_bar.close()
                     steps_trained_progress_bar = None
+
+                #region GPTQ
+                with torch.no_grad():
+                    _dataloader = random.sample(list(epoch_iterator), 16)
+                    dataloader = []
+                    for data in _dataloader:
+                        for i in range(data["input_ids"].shape[0]):
+                            dataloader.append(data["input_ids"][i].unsqueeze(0))
+                    del _dataloader
+                    utils.cleanup_memory(verbos=False)
+
+                    _model = model.module
+                    _model.eval()
+                    use_cache = _model.config.use_cache
+                    _model.config.use_cache = False
+
+                    layers = _model.model.layers
+                    dtype = next(iter(_model.parameters())).dtype
+                    dev = _model.model.embed_tokens.weight.device
+                    inps = torch.zeros(
+                        (128, 2048, _model.config.hidden_size), dtype=dtype, device=dev
+                    )
+
+                    cache = {"i": 0, "attention_mask": None}
+
+                    class Catcher(nn.Module):
+                        def __init__(self, module):
+                            super().__init__()
+                            self.module = module
+
+                        def forward(self, inp, **kwargs):
+                            inps[cache["i"]] = inp
+                            cache["i"] += 1
+                            cache["attention_mask"] = kwargs["attention_mask"]
+                            cache["position_ids"] = kwargs["position_ids"]
+                            raise ValueError
+
+                    layers[0] = Catcher(layers[0])
+                    for batch in dataloader:
+                        try:
+                            model(batch)
+                        except ValueError:
+                            pass
+                    layers[0] = layers[0].module
+
+                    outs = torch.zeros_like(inps)
+                    attention_mask = cache["attention_mask"]
+                    position_ids = cache["position_ids"]
+
+                    sequential = [
+                        [
+                            "self_attn.k_proj.module",
+                            "self_attn.v_proj.module",
+                            "self_attn.q_proj.module",
+                        ],
+                        ["self_attn.o_proj.module"],
+                        ["mlp.up_proj.module", "mlp.gate_proj.module"],
+                        ["mlp.down_proj.module"],
+                    ]
+
+                    for i in tqdm.tqdm(range(len(layers)), desc="Applying GPTQ"):
+                        layer = layers[i]
+                        full = quant_utils.find_qlayers(layer, layers=[
+                            nn.Linear, QuantizeLinear
+                        ])
+                        for names in sequential:
+                            subset = {n: full[n] for n in names}
+                            
+                            def add_batch(name):
+                                def tmp(_, inp):
+                                    subset[name].gptq.add_batch(inp[0].data)
+                                return tmp
+                            
+                            handles = []
+                            for name in subset:
+                                handles.append(subset[name].register_forward_pre_hook(add_batch(name)))
+                            for j in range(128):
+                                outs[j] = layer(
+                                    inps[j].unsqueeze(0),
+                                    attention_mask=attention_mask,
+                                    position_ids=position_ids,
+                                )[0]
+                            for h in handles:
+                                h.remove()
+                            
+                            for name in subset:
+                                subset[name].gptq.fasterquant(
+                                    percdamp=subset[name].percdamp,
+                                    groupsize=subset[name].layer_w_groupsize,
+                                    actorder=subset[name].actorder,
+                                    static_groups=False,
+                                )
+                    
+                        for j in range(128):
+                            outs[j] = layer(
+                                inps[j].unsqueeze(0),
+                                attention_mask=attention_mask,
+                                position_ids=position_ids,
+                            )[0]
+                        
+                        torch.cuda.empty_cache()
+
+                        inps, outs = outs, inps
+
+                    _model.train()
+                    _model.config.use_cache = use_cache
+                    utils.cleanup_memory(verbos=True)
+                #endregion
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)

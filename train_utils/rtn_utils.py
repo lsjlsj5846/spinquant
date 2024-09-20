@@ -24,8 +24,6 @@ def rtn_fwrd(model, dev, args):
     layers = model.model.layers
     torch.cuda.empty_cache()
 
-    quantizers = {}
-
     for i in tqdm.tqdm(range(len(layers)), desc="Inserting RTN weight quantizer"):
         layer = layers[i].to(dev)
 
@@ -50,10 +48,8 @@ def rtn_fwrd(model, dev, args):
             )
             subset[name].quantizer = quantizer
 
-            quantizers["model.layers.%d.%s" % (i, name)] = quantizer.cpu()
         layers[i] = layer.cpu()
         torch.cuda.empty_cache()
         del layer
 
     utils.cleanup_memory(verbos=True)
-    return quantizers
