@@ -30,7 +30,7 @@ def R4_rotate_down_proj_weights(layer):
 
 
 @torch.inference_mode()
-def rotate_model(model, args):
+def add_r4_rotation(model, args):
     config = model.config
     num_heads = config.num_attention_heads
     model_dim = config.hidden_size

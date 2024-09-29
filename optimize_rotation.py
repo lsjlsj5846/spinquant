@@ -59,16 +59,21 @@ def train() -> None:
     model = prepare_model(ptq_args, model)
     for param in model.parameters():
         param.requires_grad = False
+    
+    # Add R1 matrix
     R1 = random_hadamard_matrix(model.config.hidden_size, "cuda")
     model.R1 = RotateModule(R1)
+
+    # Add R2 matrices
     for i in range(model.config.num_hidden_layers):
         # Each head dim = 128 for Llama model
         R2 = random_hadamard_matrix(
             model.config.hidden_size // model.config.num_attention_heads, "cuda"
         )
         model.model.layers[i].self_attn.R2 = RotateModule(R2)
+
     if local_rank == 0:
-        log.info("Model init completed for training {}".format(model))
+        log.info("Model init completed for training.")
         log.info("Start to load tokenizer...")
     tokenizer = LlamaTokenizerFast.from_pretrained(
         pretrained_model_name_or_path=model_args.input_model,
@@ -79,7 +84,7 @@ def train() -> None:
         add_eos_token=False,
         add_bos_token=False,
     )
-    log.info("Complete tokenizer loading...")
+    log.info("Complete tokenizer loading.")
     model.config.use_cache = False
     calibration_datasets = datasets.load_dataset(
         "Salesforce/wikitext", "wikitext-2-raw-v1"
@@ -124,8 +129,10 @@ def train() -> None:
         if "R1.weight" in key or "self_attn.R2" in key
     }
     if local_rank == 0:
+        print("Save the trained Rotation matrix")
         os.makedirs(model_args.output_rotation_path, exist_ok=True)
-        path = os.path.join(model_args.output_rotation_path, "R.bin")
+        target_module = "base" if ptq_args.target_module is None else ptq_args.target_module
+        path = os.path.join(model_args.output_rotation_path, f"R_{target_module}.bin")
         torch.save(
             R_dict,
             path,

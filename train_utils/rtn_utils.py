@@ -47,6 +47,7 @@ def rtn_fwrd(model, dev, args):
                 mse=args.w_clip,
             )
             subset[name].quantizer = quantizer
+            subset[name].quantize_activated = True
 
         layers[i] = layer.cpu()
         torch.cuda.empty_cache()

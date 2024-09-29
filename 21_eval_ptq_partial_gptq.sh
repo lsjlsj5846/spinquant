@@ -25,3 +25,4 @@ torchrun --nnodes=1 --nproc_per_node=1 ptq.py \
 --v_groupsize 128 \
 --rotate \
 --optimized_rotation_path $5 \
+--target_module $6 \

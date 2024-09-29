@@ -48,9 +48,14 @@ class QuantizeLinear(nn.Linear):
             weight = weight.to(dtype)
         else:
             weight = self.weight
-        if hasattr(self, "quantizer"):
-            dtype = weight.dtype
-            self.quantizer.find_params(weight.data)
-            weight = self.quantizer.quantize(weight).to(dtype)
 
+        if hasattr(self, "quantizer"):
+            if self.quantize_activated:
+                dtype = weight.dtype
+                self.quantizer.find_params(weight.data)
+                weight = self.quantizer.quantize(weight).to(dtype)
+            
+        elif hasattr(self, "qweight"):
+            weight = self.qweight.detach() + (weight - weight.detach())
+        
         return nn.functional.linear(input, weight, self.bias)

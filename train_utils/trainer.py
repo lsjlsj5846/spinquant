@@ -2223,113 +2223,162 @@ class Trainer:
                     steps_trained_progress_bar.close()
                     steps_trained_progress_bar = None
 
-                #region GPTQ
-                with torch.no_grad():
-                    _dataloader = random.sample(list(epoch_iterator), 16)
-                    dataloader = []
-                    for data in _dataloader:
-                        for i in range(data["input_ids"].shape[0]):
-                            dataloader.append(data["input_ids"][i].unsqueeze(0))
-                    del _dataloader
-                    utils.cleanup_memory(verbos=False)
+                # #region GPTQ
+                # local_rank = utils.get_local_rank()
+                # if local_rank == 0:
+                #     with torch.no_grad():
+                #         _dataloader = random.sample(list(copy.deepcopy(epoch_iterator)), 16)
+                #         dataloader = []
+                #         for data in _dataloader:
+                #             for i in range(data["input_ids"].shape[0]):
+                #                 dataloader.append(data["input_ids"][i].unsqueeze(0))
+                #         del _dataloader
+                #         utils.cleanup_memory(verbos=False)
 
-                    _model = model.module
-                    _model.eval()
-                    use_cache = _model.config.use_cache
-                    _model.config.use_cache = False
+                #         _model = model.module
+                #         _model.eval()
+                #         use_cache = _model.config.use_cache
+                #         _model.config.use_cache = False
 
-                    layers = _model.model.layers
-                    dtype = next(iter(_model.parameters())).dtype
-                    dev = _model.model.embed_tokens.weight.device
-                    inps = torch.zeros(
-                        (128, 2048, _model.config.hidden_size), dtype=dtype, device=dev
-                    )
+                #         layers = _model.model.layers
+                #         dtype = next(iter(_model.parameters())).dtype
+                #         dev = _model.model.embed_tokens.weight.device
+                #         inps = torch.zeros(
+                #             (128, 2048, _model.config.hidden_size), dtype=dtype, device=dev
+                #         )
 
-                    cache = {"i": 0, "attention_mask": None}
+                #         cache = {"i": 0, "attention_mask": None}
 
-                    class Catcher(nn.Module):
-                        def __init__(self, module):
-                            super().__init__()
-                            self.module = module
+                #         class Catcher(nn.Module):
+                #             def __init__(self, module):
+                #                 super().__init__()
+                #                 self.module = module
 
-                        def forward(self, inp, **kwargs):
-                            inps[cache["i"]] = inp
-                            cache["i"] += 1
-                            cache["attention_mask"] = kwargs["attention_mask"]
-                            cache["position_ids"] = kwargs["position_ids"]
-                            raise ValueError
+                #             def forward(self, inp, **kwargs):
+                #                 inps[cache["i"]] = inp
+                #                 cache["i"] += 1
+                #                 cache["attention_mask"] = kwargs["attention_mask"]
+                #                 cache["position_ids"] = kwargs["position_ids"]
+                #                 raise ValueError
 
-                    layers[0] = Catcher(layers[0])
-                    for batch in dataloader:
-                        try:
-                            model(batch)
-                        except ValueError:
-                            pass
-                    layers[0] = layers[0].module
+                #         layers[0] = Catcher(layers[0])
+                #         for batch in dataloader:
+                #             try:
+                #                 model(batch)
+                #             except ValueError:
+                #                 pass
+                #         layers[0] = layers[0].module
 
-                    outs = torch.zeros_like(inps)
-                    attention_mask = cache["attention_mask"]
-                    position_ids = cache["position_ids"]
+                #         outs = torch.zeros_like(inps)
+                #         attention_mask = cache["attention_mask"]
+                #         position_ids = cache["position_ids"]
 
-                    sequential = [
-                        [
-                            "self_attn.k_proj.module",
-                            "self_attn.v_proj.module",
-                            "self_attn.q_proj.module",
-                        ],
-                        ["self_attn.o_proj.module"],
-                        ["mlp.up_proj.module", "mlp.gate_proj.module"],
-                        ["mlp.down_proj.module"],
-                    ]
+                #         sequential = [
+                #             [
+                #                 "self_attn.k_proj.module",
+                #                 "self_attn.v_proj.module",
+                #                 "self_attn.q_proj.module",
+                #             ],
+                #             ["self_attn.o_proj.module"],
+                #             ["mlp.up_proj.module", "mlp.gate_proj.module"],
+                #             ["mlp.down_proj.module"],
+                #         ]
 
-                    for i in tqdm.tqdm(range(len(layers)), desc="Applying GPTQ"):
-                        layer = layers[i]
-                        full = quant_utils.find_qlayers(layer, layers=[
-                            nn.Linear, QuantizeLinear
-                        ])
-                        for names in sequential:
-                            subset = {n: full[n] for n in names}
+                #         for i in tqdm.tqdm(range(len(layers)), desc="Applying GPTQ"):
+                #             layer = layers[i]
+                #             if self.args.target_module is None:
+                #                 full = quant_utils.find_qlayers(layer, layers=[
+                #                     nn.Linear, QuantizeLinear
+                #                 ])
+                #                 for names in sequential:
+                #                     subset = {n: full[n] for n in names}
+                                    
+                #                     def add_batch(name):
+                #                         def tmp(_, inp):
+                #                             subset[name].gptq.add_batch(inp[0].data)
+                #                         return tmp
+                                    
+                #                     handles = []
+                #                     for name in subset:
+                #                         handles.append(subset[name].register_forward_pre_hook(add_batch(name)))
+                #                     for j in range(128):
+                #                         outs[j] = layer(
+                #                             inps[j].unsqueeze(0),
+                #                             attention_mask=attention_mask,
+                #                             position_ids=position_ids,
+                #                         )[0]
+                #                     for h in handles:
+                #                         h.remove()
+                                    
+                #                     for name in subset:
+                #                         subset[name].gptq.fasterquant(
+                #                             percdamp=subset[name].percdamp,
+                #                             groupsize=subset[name].layer_w_groupsize,
+                #                             actorder=subset[name].actorder,
+                #                             static_groups=False,
+                #                         )
+                                
+                #                 for j in range(128):
+                #                     outs[j] = layer(
+                #                         inps[j].unsqueeze(0),
+                #                         attention_mask=attention_mask,
+                #                         position_ids=position_ids,
+                #                     )[0]
                             
-                            def add_batch(name):
-                                def tmp(_, inp):
-                                    subset[name].gptq.add_batch(inp[0].data)
-                                return tmp
-                            
-                            handles = []
-                            for name in subset:
-                                handles.append(subset[name].register_forward_pre_hook(add_batch(name)))
-                            for j in range(128):
-                                outs[j] = layer(
-                                    inps[j].unsqueeze(0),
-                                    attention_mask=attention_mask,
-                                    position_ids=position_ids,
-                                )[0]
-                            for h in handles:
-                                h.remove()
-                            
-                            for name in subset:
-                                subset[name].gptq.fasterquant(
-                                    percdamp=subset[name].percdamp,
-                                    groupsize=subset[name].layer_w_groupsize,
-                                    actorder=subset[name].actorder,
-                                    static_groups=False,
-                                )
-                    
-                        for j in range(128):
-                            outs[j] = layer(
-                                inps[j].unsqueeze(0),
-                                attention_mask=attention_mask,
-                                position_ids=position_ids,
-                            )[0]
+                #             else:
+                #                 subset = quant_utils.find_qlayers(
+                #                     layer, layers=[torch.nn.Linear, QuantizeLinear]
+                #                 )
+                                
+                #                 for name in subset:
+                #                     subset[name].quantize_activated = False
+                                
+                #                 for name in subset:
+                #                     if name.find(self.args.target_module) > -1:
+                #                         def add_batch(name):
+                #                             def tmp(_, inp):
+                #                                 subset[name].gptq.add_batch(inp[0].data)
+                #                             return tmp
+                                        
+                #                         handles = []
+                #                         handles.append(subset[name].register_forward_pre_hook(add_batch(name)))
+                #                         for j in range(128):
+                #                             outs[j] = layer(
+                #                                 inps[j].unsqueeze(0),
+                #                                 attention_mask=attention_mask,
+                #                                 position_ids=position_ids,
+                #                             )[0]
+                #                         for h in handles:
+                #                             h.remove()
+
+                #                         subset[name].gptq.fasterquant(
+                #                             percdamp=subset[name].percdamp,
+                #                             groupsize=subset[name].layer_w_groupsize,
+                #                             actorder=subset[name].actorder,
+                #                             static_groups=False,
+                #                         )
                         
-                        torch.cuda.empty_cache()
+                #                 for j in range(128):
+                #                     outs[j] = layer(
+                #                         inps[j].unsqueeze(0),
+                #                         attention_mask=attention_mask,
+                #                         position_ids=position_ids,
+                #                     )[0]
+                                
+                #                 for name in subset:
+                #                     subset[name].quantize_activated = True
+                #                     del subset[name].qweight
+                #                     subset[name].qweight_activated = False
 
-                        inps, outs = outs, inps
+                #             torch.cuda.empty_cache()
 
-                    _model.train()
-                    _model.config.use_cache = use_cache
-                    utils.cleanup_memory(verbos=True)
-                #endregion
+                #             inps, outs = outs, inps
+
+                #         _model.train()
+                #         _model.config.use_cache = use_cache
+                #         utils.cleanup_memory(verbos=True)
+                # torch.distributed.barrier()
+                # #endregion
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
@@ -2448,7 +2497,7 @@ class Trainer:
             # Clean the state at the end of training
             delattr(self, "_past")
 
-        logger.info("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
+        print("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
         if args.load_best_model_at_end and self.state.best_model_checkpoint is not None:
             # Wait for everyone to get here so we are sure the model has been saved by process 0.
             if is_torch_xla_available():

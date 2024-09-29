@@ -231,6 +231,11 @@ def parser_gen():
         "--layer_idx", type=int, default=10, help="Which decoder layer to capture"
     )
 
+    # Partial GPTQ
+    parser.add_argument(
+        "--target_module", type=str, default=None, help="Target module to apply GPTQ"
+    )
+
     args, unknown = parser.parse_known_args()
 
     assert (
@@ -257,5 +262,7 @@ def process_args_ptq():
     else:
         ptq_args.optimized_rotation_path = None
     ptq_args.bsz = training_args.per_device_eval_batch_size
+    
+    training_args.target_module = ptq_args.target_module
 
     return model_args, training_args, ptq_args

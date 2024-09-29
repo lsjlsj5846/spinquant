@@ -19,10 +19,13 @@ def prepare_model(args, model):
 
     # Rotate the weights
     fuse_norm_utils.fuse_layer_norms(model)
-    apply_r3_r4.rotate_model(model, args)
+    apply_r3_r4.add_r4_rotation(model, args)
     utils.cleanup_memory(verbos=True)
 
-    quant_utils.add_actquant(model)  # Add Activation Wrapper to the model
+    # Add Activation Wrapper to the model
+    quant_utils.add_actquant(model)
+
+    # Add R4 Rotation to activation of down projection
     qlayers = quant_utils.find_qlayers(model)
     for name in qlayers:
         if "down_proj" in name:
@@ -32,13 +35,14 @@ def prepare_model(args, model):
             qlayers[name].K = K
             qlayers[name].fp32_had = args.fp32_had
 
+    # Add Weight Quantizer (configuration)
     if args.w_bits < 16:
         if args.w_rtn:
             rtn_utils.rtn_fwrd(model, "cuda", args)
         else:
             gptq_utils.gptq_fwrd(model, "cuda", args)
 
-    # Add Input Quantization
+    # Add Input Quantizer (configuration)
     if args.a_bits < 16 or args.v_bits < 16:
         qlayers = quant_utils.find_qlayers(model, layers=[quant_utils.ActQuantWrapper])
         down_proj_groupsize = -1

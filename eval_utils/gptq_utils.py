@@ -216,59 +216,109 @@ def gptq_fwrd(model, dataloader, dev, args):
     ]
 
     pbar = tqdm.tqdm(range(len(layers)))
+    
     for i in pbar:
         pbar.set_description(f"(GPTQ quant.) Layer #{i+1}")
         layer = layers[i].to(dev)
-        full = quant_utils.find_qlayers(layer, layers=[torch.nn.Linear])
-        for names in sequential:
-            subset = {n: full[n] for n in names}
+        if args.target_module is None:
+            full = quant_utils.find_qlayers(layer, layers=[torch.nn.Linear])
+            for names in sequential:
+                subset = {n: full[n] for n in names}
 
+                gptq = {}
+                for name in subset:
+                    layer_weight_bits = args.w_bits
+                    layer_weight_sym = not (args.w_asym)
+                    if "lm_head" in name:
+                        layer_weight_bits = 16
+                        continue
+                    if args.int8_down_proj and "down_proj" in name:
+                        layer_weight_bits = 8
+                    gptq[name] = GPTQ(subset[name])
+                    gptq[name].quantizer = quant_utils.WeightQuantizer()
+                    gptq[name].quantizer.configure(
+                        layer_weight_bits,
+                        perchannel=True,
+                        sym=layer_weight_sym,
+                        mse=args.w_clip,
+                    )
+
+                def add_batch(name):
+                    def tmp(_, inp, out):
+                        gptq[name].add_batch(inp[0].data, out.data)  # noqa: F821
+
+                    return tmp
+
+                handles = []
+                for name in subset:
+                    handles.append(subset[name].register_forward_hook(add_batch(name)))
+                for j in range(args.nsamples):
+                    outs[j] = layer(
+                        inps[j].unsqueeze(0),
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                    )[0]
+                for h in handles:
+                    h.remove()
+
+                for name in subset:
+                    layer_w_groupsize = args.w_groupsize
+                    gptq[name].fasterquant(
+                        percdamp=args.percdamp,
+                        groupsize=layer_w_groupsize,
+                        actorder=args.act_order,
+                        static_groups=False,
+                    )
+                    quantizers["model.layers.%d.%s" % (i, name)] = gptq[name].quantizer
+                    gptq[name].free()
+
+        else:
+            subset = quant_utils.find_qlayers(layer, layers=[torch.nn.Linear])
             gptq = {}
             for name in subset:
-                layer_weight_bits = args.w_bits
-                layer_weight_sym = not (args.w_asym)
-                if "lm_head" in name:
-                    layer_weight_bits = 16
-                    continue
-                if args.int8_down_proj and "down_proj" in name:
-                    layer_weight_bits = 8
-                gptq[name] = GPTQ(subset[name])
-                gptq[name].quantizer = quant_utils.WeightQuantizer()
-                gptq[name].quantizer.configure(
-                    layer_weight_bits,
-                    perchannel=True,
-                    sym=layer_weight_sym,
-                    mse=args.w_clip,
-                )
+                if name.find(args.target_module) > -1:
+                    layer_weight_bits = args.w_bits
+                    layer_weight_sym = not (args.w_asym)
+                    if "lm_head" in name:
+                        layer_weight_bits = 16
+                        continue
+                    if args.int8_down_proj and "down_proj" in name:
+                        layer_weight_bits = 8
+                    gptq[name] = GPTQ(subset[name])
+                    gptq[name].quantizer = quant_utils.WeightQuantizer()
+                    gptq[name].quantizer.configure(
+                        layer_weight_bits,
+                        perchannel=True,
+                        sym=layer_weight_sym,
+                        mse=args.w_clip,
+                    )
 
-            def add_batch(name):
-                def tmp(_, inp, out):
-                    gptq[name].add_batch(inp[0].data, out.data)  # noqa: F821
+                    def add_batch(name):
+                        def tmp(_, inp, out):
+                            gptq[name].add_batch(inp[0].data, out.data)  # noqa: F821
 
-                return tmp
+                        return tmp
 
-            handles = []
-            for name in subset:
-                handles.append(subset[name].register_forward_hook(add_batch(name)))
-            for j in range(args.nsamples):
-                outs[j] = layer(
-                    inps[j].unsqueeze(0),
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                )[0]
-            for h in handles:
-                h.remove()
+                    handles = []
+                    handles.append(subset[name].register_forward_hook(add_batch(name)))
+                    for j in range(args.nsamples):
+                        outs[j] = layer(
+                            inps[j].unsqueeze(0),
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                        )[0]
+                    for h in handles:
+                        h.remove()
 
-            for name in subset:
-                layer_w_groupsize = args.w_groupsize
-                gptq[name].fasterquant(
-                    percdamp=args.percdamp,
-                    groupsize=layer_w_groupsize,
-                    actorder=args.act_order,
-                    static_groups=False,
-                )
-                quantizers["model.layers.%d.%s" % (i, name)] = gptq[name].quantizer
-                gptq[name].free()
+                    layer_w_groupsize = args.w_groupsize
+                    gptq[name].fasterquant(
+                        percdamp=args.percdamp,
+                        groupsize=layer_w_groupsize,
+                        actorder=args.act_order,
+                        static_groups=False,
+                    )
+                    quantizers["model.layers.%d.%s" % (i, name)] = gptq[name].quantizer
+                    gptq[name].free()
 
         for j in range(args.nsamples):
             outs[j] = layer(
@@ -307,6 +357,9 @@ def rtn_fwrd(model, dev, args):
         subset = quant_utils.find_qlayers(layer, layers=[torch.nn.Linear])
 
         for name in subset:
+            if (args.target_module is not None) and \
+                (name.find(args.target_module)) > -1:
+                continue
             layer_weight_bits = args.w_bits
             if "lm_head" in name:
                 layer_weight_bits = 16

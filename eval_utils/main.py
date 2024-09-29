@@ -59,6 +59,9 @@ def ptq_model(args, model, model_args=None):
             )
             quantizers = gptq_utils.gptq_fwrd(model, trainloader, "cuda", args)
             save_dict["w_quantizers"] = quantizers
+            if args.target_module is not None:
+                quantizers = gptq_utils.rtn_fwrd(model, "cuda", args)
+                save_dict["w_quantizers"].update(quantizers)
         else:  # RTN Weight Quantization
             quantizers = gptq_utils.rtn_fwrd(model, "cuda", args)
             save_dict["w_quantizers"] = quantizers
